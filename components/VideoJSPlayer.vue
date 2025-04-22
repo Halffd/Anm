@@ -32,97 +32,61 @@
 import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import videojs from 'video.js';
 import 'video.js/dist/video-js.css';
-import 'videojs-ass';
+import type { VideoJsPlayer } from 'video.js';
+
+// Import videojs-ass only on client side
+if (process.client) {
+  // Dynamic import for client-side only
+  import('videojs-ass');
+}
 
 // Define props
-const props = defineProps({
-  src: {
-    type: String,
-    required: true
-  },
-  subtitles: {
-    type: Array,
-    default: () => []
-  },
-  width: {
-    type: Number,
-    default: 640
-  },
-  height: {
-    type: Number,
-    default: 360
-  },
-  autoplay: {
-    type: Boolean,
-    default: false
-  },
-  controls: {
-    type: Boolean,
-    default: true
-  },
-  loop: {
-    type: Boolean,
-    default: false
-  },
-  muted: {
-    type: Boolean,
-    default: false
-  },
-  poster: {
-    type: String,
-    default: ''
-  },
-  startTime: {
-    type: Number,
-    default: 0
-  },
-  playbackRates: {
-    type: Array,
-    default: () => [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
-  },
-  responsive: {
-    type: Boolean,
-    default: true
-  },
-  fill: {
-    type: Boolean,
-    default: false
-  },
-  language: {
-    type: String,
-    default: 'en'
-  },
-  showSidebarToggle: {
-    type: Boolean,
-    default: true
-  },
-  sidebarActive: {
-    type: Boolean,
-    default: false
-  }
-});
+const props = defineProps<{
+  src: string;
+  subtitles: Array<{
+    src: string;
+    language: string;
+    label?: string;
+    format?: string;
+    delay?: number;
+  }>;
+  width: number;
+  height: number;
+  autoplay: boolean;
+  controls: boolean;
+  loop: boolean;
+  muted: boolean;
+  poster: string;
+  startTime: number;
+  playbackRates: number[];
+  responsive: boolean;
+  fill: boolean;
+  language: string;
+  showSidebarToggle: boolean;
+  sidebarActive: boolean;
+}>();
 
 // Define emits
-const emit = defineEmits([
-  'ready', 
-  'play', 
-  'pause', 
-  'timeupdate', 
-  'ended', 
-  'error', 
-  'word-click',
-  'subtitle-change',
-  'audio-track-change',
-  'fullscreen-change',
-  'volume-change',
-  'toggle-sidebar'
-]);
+const emit = defineEmits<{
+  ready: [methods: typeof playerMethods];
+  play: [];
+  pause: [];
+  timeupdate: [time: number];
+  ended: [];
+  error: [error: Error];
+  'word-click': [word: string];
+  'subtitle-change': [trackId: number];
+  'audio-track-change': [trackId: number];
+  'fullscreen-change': [isFullscreen: boolean];
+  'volume-change': [{ volume: number; muted: boolean }];
+  'toggle-sidebar': [active: boolean];
+}>();
 
 // Refs
-const videoContainer = ref(null);
-const videoElement = ref(null);
-const player = ref(null);
-const subtitleObserver = ref(null);
+const videoContainer = ref<HTMLDivElement | null>(null);
+const videoElement = ref<HTMLVideoElement | null>(null);
+const player = ref<VideoJsPlayer | null>(null);
+const subtitleObserver = ref<MutationObserver | null>(null);
 
 // Toggle sidebar
 function toggleSidebar() {
@@ -133,19 +97,19 @@ function toggleSidebar() {
 const playerMethods = {
   play: () => player.value?.play(),
   pause: () => player.value?.pause(),
-  currentTime: (time) => {
+  currentTime: (time?: number) => {
     if (time !== undefined) {
       player.value?.currentTime(time);
     }
     return player.value?.currentTime();
   },
-  volume: (level) => {
+  volume: (level?: number) => {
     if (level !== undefined) {
       player.value?.volume(level);
     }
     return player.value?.volume();
   },
-  muted: (muted) => {
+  muted: (muted?: boolean) => {
     if (muted !== undefined) {
       player.value?.muted(muted);
     }
@@ -158,13 +122,13 @@ const playerMethods = {
   dispose: () => player.value?.dispose(),
   textTracks: () => player.value?.textTracks(),
   audioTracks: () => player.value?.audioTracks(),
-  playbackRate: (rate) => {
+  playbackRate: (rate?: number) => {
     if (rate !== undefined) {
       player.value?.playbackRate(rate);
     }
     return player.value?.playbackRate();
   },
-  showTextTrack: (trackId, show) => {
+  showTextTrack: (trackId: number, show: boolean) => {
     const tracks = player.value?.textTracks();
     if (tracks) {
       for (let i = 0; i < tracks.length; i++) {
@@ -227,11 +191,11 @@ onMounted(async () => {
         enableVolumeScroll: true,
         customKeys: {
           toggleSidebar: {
-            key: function(e) {
+            key: (e: KeyboardEvent) => {
               // 'S' key
               return e.which === 83;
             },
-            handler: function(player, options, e) {
+            handler: (player: VideoJsPlayer, options: any, e: KeyboardEvent) => {
               toggleSidebar();
             }
           }
@@ -246,7 +210,7 @@ onMounted(async () => {
     
     // Set initial time if provided
     if (props.startTime > 0) {
-      player.value.currentTime(props.startTime);
+      player.value?.currentTime(props.startTime);
     }
     
     // Load subtitles
@@ -259,19 +223,19 @@ onMounted(async () => {
   // Standard events
   player.value.on('play', () => emit('play'));
   player.value.on('pause', () => emit('pause'));
-  player.value.on('timeupdate', () => emit('timeupdate', player.value.currentTime()));
+  player.value.on('timeupdate', () => emit('timeupdate', player.value?.currentTime() || 0));
   player.value.on('ended', () => emit('ended'));
-  player.value.on('error', (error) => emit('error', error));
-  player.value.on('fullscreenchange', () => emit('fullscreen-change', player.value.isFullscreen()));
+  player.value.on('error', (error: Error) => emit('error', error));
+  player.value.on('fullscreenchange', () => emit('fullscreen-change', player.value?.isFullscreen() || false));
   player.value.on('volumechange', () => emit('volume-change', {
-    volume: player.value.volume(),
-    muted: player.value.muted()
+    volume: player.value?.volume() || 0,
+    muted: player.value?.muted() || false
   }));
   
   // Track change events
-  player.value.textTracks().addEventListener('change', handleTextTrackChange);
+  player.value.textTracks()?.addEventListener('change', handleTextTrackChange);
   if (player.value.audioTracks) {
-    player.value.audioTracks().addEventListener('change', handleAudioTrackChange);
+    player.value.audioTracks()?.addEventListener('change', handleAudioTrackChange);
   }
   
   // Setup word click handler for Yomichan compatibility
@@ -360,27 +324,31 @@ function loadSubtitles() {
   props.subtitles.forEach((subtitle, index) => {
     if (subtitle.format === 'ass') {
       // Add ASS subtitles using videojs-ass plugin
-      player.value.ass({
-        src: subtitle.src,
-        label: subtitle.label || subtitle.language,
-        delay: subtitle.delay || 0,
-        enableSvg: false, // Disable SVG for better Yomichan compatibility
-        fontSize: '24px', // Larger default font size
-        fontFamily: 'Arial, sans-serif',
-        fontWeight: 'normal',
-        color: '#FFFFFF',
-        backgroundColor: 'rgba(0, 0, 0, 0.7)',
-        textShadow: '2px 2px 2px rgba(0, 0, 0, 0.8)'
-      });
+      if (player.value) {
+        player.value.ass({
+          src: subtitle.src,
+          label: subtitle.label || subtitle.language,
+          delay: subtitle.delay || 0,
+          enableSvg: false, // Disable SVG for better Yomichan compatibility
+          fontSize: '24px', // Larger default font size
+          fontFamily: 'Arial, sans-serif',
+          fontWeight: 'normal',
+          color: '#FFFFFF',
+          backgroundColor: 'rgba(0, 0, 0, 0.7)',
+          textShadow: '2px 2px 2px rgba(0, 0, 0, 0.8)'
+        });
+      }
     } else {
       // Add standard WebVTT or SRT subtitles
-      player.value.addRemoteTextTrack({
-        kind: 'subtitles',
-        src: subtitle.src,
-        srclang: subtitle.language,
-        label: subtitle.label || subtitle.language,
-        default: index === 0
-      }, false);
+      if (player.value) {
+        player.value.addRemoteTextTrack({
+          kind: 'subtitles',
+          src: subtitle.src,
+          srclang: subtitle.language,
+          label: subtitle.label || subtitle.language,
+          default: index === 0
+        }, false);
+      }
     }
   });
   
@@ -415,7 +383,9 @@ function setupSubtitleObserver() {
   
   // Find or wait for the subtitle container
   const checkForSubtitleContainer = () => {
-    const subtitleContainer = videoContainer.value.querySelector('.vjs-ass-subtitles, .vjs-text-track-display');
+    if (!videoContainer.value) return;
+    
+    const subtitleContainer = videoContainer.value.querySelector<HTMLElement>('.vjs-ass-subtitles, .vjs-text-track-display');
     
     if (subtitleContainer) {
       // Create observer to watch for changes to subtitles
