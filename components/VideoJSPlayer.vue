@@ -34,10 +34,53 @@ import videojs from 'video.js';
 import 'video.js/dist/video-js.css';
 import type { VideoJsPlayer } from 'video.js';
 
+// Define libjass in the window object
+declare global {
+  interface Window {
+    libjass?: any;
+    videojs: any;
+  }
+}
+
+// Extend the videojs type to include the plugin method
+declare module 'video.js' {
+  interface VideoJsStatic {
+    plugin?: (name: string, plugin: any) => void;
+    registerPlugin: (name: string, plugin: any) => void;
+  }
+}
+
+// Polyfill for older plugins using videojs.plugin() API
+// This is needed for videojs-ass to work with newer Video.js versions
+if (process.client && typeof (videojs as any).plugin !== 'function') {
+  (videojs as any).plugin = function(name: string, plugin: any) {
+    (videojs as any).registerPlugin(name, plugin);
+  };
+}
+
 // Import videojs-ass only on client side
+// Use a safe way to import and register the plugin
+let videojsAssLoaded = false;
 if (process.client) {
-  // Dynamic import for client-side only
-  import('videojs-ass');
+  try {
+    // Check if libjass is available in the window object
+    if (typeof window.libjass === 'undefined') {
+      console.warn('libjass library not found, ASS subtitles may not work properly');
+    }
+    
+    // We need to load and register the plugin explicitly instead of just importing it
+    import('videojs-ass').then(module => {
+      if (module) {
+        // Plugin loaded successfully
+        videojsAssLoaded = true;
+        console.log('videojs-ass plugin loaded successfully');
+      }
+    }).catch(err => {
+      console.error('Failed to load videojs-ass plugin:', err);
+    });
+  } catch (e) {
+    console.error('Error importing videojs-ass:', e);
+  }
 }
 
 // Define props
@@ -147,6 +190,20 @@ const playerMethods = {
 onMounted(async () => {
   if (!videoElement.value) return;
 
+  // Load libjass library dynamically
+  if (process.client && typeof window.libjass === 'undefined') {
+    try {
+      await loadExternalScript('https://cdn.jsdelivr.net/npm/libjass@0.11.0/libjass.min.js');
+      console.log('libjass library loaded successfully');
+    } catch (e) {
+      console.error('Failed to load libjass library:', e);
+    }
+  }
+
+  // Validate source URL
+  const validSource = props.src && (props.src.startsWith('http') || props.src.startsWith('blob:') || props.src.startsWith('file:'));
+  const sources = validSource ? [{ src: props.src }] : [];
+
   // Initialize player with options
   player.value = videojs(videoElement.value, {
     controls: props.controls,
@@ -154,7 +211,7 @@ onMounted(async () => {
     loop: props.loop,
     muted: props.muted,
     poster: props.poster,
-    sources: [{ src: props.src }],
+    sources: sources,
     playbackRates: props.playbackRates,
     fluid: props.responsive,
     fill: props.fill,
@@ -225,7 +282,36 @@ onMounted(async () => {
   player.value.on('pause', () => emit('pause'));
   player.value.on('timeupdate', () => emit('timeupdate', player.value?.currentTime() || 0));
   player.value.on('ended', () => emit('ended'));
-  player.value.on('error', (error: Error) => emit('error', error));
+  player.value.on('error', (error: Error) => {
+    // Handle videojs errors
+    let errorMessage = 'Video playback error';
+    const errorEvent = error as any;
+    
+    // Check if it's a MediaError - now using the properly typed error method
+    if (player.value) {
+      const mediaError = player.value.error();
+      if (mediaError) {
+        switch (mediaError.code) {
+          case 1: // MEDIA_ERR_ABORTED
+            errorMessage = 'You aborted the video playback';
+            break;
+          case 2: // MEDIA_ERR_NETWORK
+            errorMessage = 'A network error caused the video download to fail';
+            break;
+          case 3: // MEDIA_ERR_DECODE
+            errorMessage = 'The video playback was aborted due to a corruption problem';
+            break;
+          case 4: // MEDIA_ERR_SRC_NOT_SUPPORTED
+            errorMessage = 'No compatible source was found for this video';
+            break;
+          default:
+            errorMessage = `Video error: ${mediaError.message || 'Unknown error'}`;
+        }
+      }
+    }
+    
+    emit('error', new Error(errorMessage));
+  });
   player.value.on('fullscreenchange', () => emit('fullscreen-change', player.value?.isFullscreen() || false));
   player.value.on('volumechange', () => emit('volume-change', {
     volume: player.value?.volume() || 0,
@@ -272,8 +358,14 @@ watch(() => props.subtitles, () => {
 // Watch for source changes
 watch(() => props.src, (newSrc) => {
   if (player.value && newSrc) {
-    player.value.src({ src: newSrc });
-    player.value.load();
+    // Validate the source URL before setting it
+    if (newSrc && (newSrc.startsWith('http') || newSrc.startsWith('blob:') || newSrc.startsWith('file:'))) {
+      player.value.src({ src: newSrc });
+      player.value.load();
+    } else {
+      console.error('Invalid video source URL:', newSrc);
+      emit('error', new Error('Invalid video source URL'));
+    }
   }
 });
 
@@ -323,32 +415,36 @@ function loadSubtitles() {
   // Add new subtitle tracks
   props.subtitles.forEach((subtitle, index) => {
     if (subtitle.format === 'ass') {
-      // Add ASS subtitles using videojs-ass plugin
-      if (player.value) {
-        player.value.ass({
-          src: subtitle.src,
-          label: subtitle.label || subtitle.language,
-          delay: subtitle.delay || 0,
-          enableSvg: false, // Disable SVG for better Yomichan compatibility
-          fontSize: '24px', // Larger default font size
-          fontFamily: 'Arial, sans-serif',
-          fontWeight: 'normal',
-          color: '#FFFFFF',
-          backgroundColor: 'rgba(0, 0, 0, 0.7)',
-          textShadow: '2px 2px 2px rgba(0, 0, 0, 0.8)'
-        });
+      // Check if the ASS plugin is available before trying to use it
+      if (player.value && typeof (player.value as any).ass === 'function') {
+        try {
+          // Add ASS subtitles using videojs-ass plugin
+          (player.value as any).ass({
+            src: subtitle.src,
+            label: subtitle.label || subtitle.language,
+            srclang: subtitle.language,
+            delay: subtitle.delay || 0,
+            enableSvg: false, // Disable SVG for better Yomichan compatibility
+            fontSize: '24px', // Larger default font size
+            fontFamily: 'Arial, sans-serif',
+            fontWeight: 'normal',
+            color: '#FFFFFF',
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+            textShadow: '2px 2px 2px rgba(0, 0, 0, 0.8)'
+          });
+          console.log('ASS subtitle loaded successfully:', subtitle.src);
+        } catch (e) {
+          console.error('Error loading ASS subtitle:', e);
+          // Fall back to standard subtitles
+          addStandardSubtitle(subtitle, index);
+        }
+      } else {
+        console.warn('videojs-ass plugin not available, falling back to standard subtitles');
+        addStandardSubtitle(subtitle, index);
       }
     } else {
       // Add standard WebVTT or SRT subtitles
-      if (player.value) {
-        player.value.addRemoteTextTrack({
-          kind: 'subtitles',
-          src: subtitle.src,
-          srclang: subtitle.language,
-          label: subtitle.label || subtitle.language,
-          default: index === 0
-        }, false);
-      }
+      addStandardSubtitle(subtitle, index);
     }
   });
   
@@ -356,6 +452,19 @@ function loadSubtitles() {
   nextTick(() => {
     setupWordClickHandler();
   });
+}
+
+// Helper function to add standard subtitles
+function addStandardSubtitle(subtitle: any, index: number) {
+  if (player.value) {
+    player.value.addRemoteTextTrack({
+      kind: 'subtitles',
+      src: subtitle.src,
+      srclang: subtitle.language,
+      label: subtitle.label || subtitle.language,
+      default: index === 0
+    }, false);
+  }
 }
 
 // Setup word click handler for Yomichan compatibility
@@ -428,6 +537,18 @@ function makeNodeSelectable(element: HTMLElement) {
   // Process child elements
   Array.from(element.children).forEach(child => {
     makeNodeSelectable(child as HTMLElement);
+  });
+}
+
+// Helper function to load external scripts
+function loadExternalScript(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+    document.head.appendChild(script);
   });
 }
 

@@ -417,9 +417,8 @@ function adjustDelay(amount: number) {
   // Apply delay to current subtitle track
   if (player.value && activeSubtitleTrack.value >= 0) {
     // For ASS subtitles
-    const assPlugin = player.value.player_?.ass;
-    if (assPlugin) {
-      assPlugin.delay = subtitleDelay.value;
+    if (player.value.player_ && player.value.player_.ass) {
+      player.value.player_.ass.delay = subtitleDelay.value;
     }
   }
 }

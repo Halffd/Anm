@@ -42,6 +42,12 @@ declare module 'video.js' {
       };
     };
     showTextTrack(index: number, show: boolean): void;
+    error(): {
+      code: number;
+      message: string;
+      type?: string;
+      status?: number;
+    } | null;
   }
 
   interface VideoJsPlayerOptions {
