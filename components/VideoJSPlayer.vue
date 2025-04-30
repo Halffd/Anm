@@ -4,6 +4,11 @@
     ref="videoContainer"
     :class="{ 'sidebar-active': sidebarActive }"
   >
+    <!-- Debug indicator -->
+    <div v-if="debugMode" class="debug-overlay">
+      Size: {{ containerSize.width }}x{{ containerSize.height }}
+    </div>
+    
     <video
       ref="videoElement"
       class="video-js vjs-default-skin vjs-big-play-centered"
@@ -33,55 +38,6 @@ import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import videojs from 'video.js';
 import 'video.js/dist/video-js.css';
 import type { VideoJsPlayer } from 'video.js';
-
-// Define libjass in the window object
-declare global {
-  interface Window {
-    libjass?: any;
-    videojs: any;
-  }
-}
-
-// Extend the videojs type to include the plugin method
-declare module 'video.js' {
-  interface VideoJsStatic {
-    plugin?: (name: string, plugin: any) => void;
-    registerPlugin: (name: string, plugin: any) => void;
-  }
-}
-
-// Polyfill for older plugins using videojs.plugin() API
-// This is needed for videojs-ass to work with newer Video.js versions
-if (process.client && typeof (videojs as any).plugin !== 'function') {
-  (videojs as any).plugin = function(name: string, plugin: any) {
-    (videojs as any).registerPlugin(name, plugin);
-  };
-}
-
-// Import videojs-ass only on client side
-// Use a safe way to import and register the plugin
-let videojsAssLoaded = false;
-if (process.client) {
-  try {
-    // Check if libjass is available in the window object
-    if (typeof window.libjass === 'undefined') {
-      console.warn('libjass library not found, ASS subtitles may not work properly');
-    }
-    
-    // We need to load and register the plugin explicitly instead of just importing it
-    import('videojs-ass').then(module => {
-      if (module) {
-        // Plugin loaded successfully
-        videojsAssLoaded = true;
-        console.log('videojs-ass plugin loaded successfully');
-      }
-    }).catch(err => {
-      console.error('Failed to load videojs-ass plugin:', err);
-    });
-  } catch (e) {
-    console.error('Error importing videojs-ass:', e);
-  }
-}
 
 // Define props
 const props = defineProps<{
@@ -130,6 +86,10 @@ const videoContainer = ref<HTMLDivElement | null>(null);
 const videoElement = ref<HTMLVideoElement | null>(null);
 const player = ref<VideoJsPlayer | null>(null);
 const subtitleObserver = ref<MutationObserver | null>(null);
+
+// Define debug mode for troubleshooting
+const debugMode = ref(true);
+const containerSize = ref({ width: 0, height: 0 });
 
 // Toggle sidebar
 function toggleSidebar() {
@@ -183,150 +143,123 @@ const playerMethods = {
       }
     }
   },
+  width: () => videoElement.value?.clientWidth || 0,
+  height: () => videoElement.value?.clientHeight || 0,
   toggleSidebar
 };
 
 // Initialize Video.js player
-onMounted(async () => {
-  if (!videoElement.value) return;
-
-  // Load libjass library dynamically
-  if (process.client && typeof window.libjass === 'undefined') {
-    try {
-      await loadExternalScript('https://cdn.jsdelivr.net/npm/libjass@0.11.0/libjass.min.js');
-      console.log('libjass library loaded successfully');
-    } catch (e) {
-      console.error('Failed to load libjass library:', e);
-    }
+onMounted(() => {
+  console.log('[VideoJSPlayer] onMounted - Starting player initialization');
+  
+  // Ensure container exists
+  const videoContainerElement = videoContainer.value;
+  if (!videoContainerElement) {
+    console.error('[VideoJSPlayer] Video container element is null');
+    return;
   }
-
-  // Validate source URL
-  const validSource = props.src && (props.src.startsWith('http') || props.src.startsWith('blob:') || props.src.startsWith('file:'));
-  const sources = validSource ? [{ src: props.src }] : [];
-
-  // Initialize player with options
-  player.value = videojs(videoElement.value, {
-    controls: props.controls,
-    autoplay: props.autoplay,
-    loop: props.loop,
-    muted: props.muted,
-    poster: props.poster,
-    sources: sources,
-    playbackRates: props.playbackRates,
-    fluid: props.responsive,
-    fill: props.fill,
-    language: props.language,
-    controlBar: {
-      children: [
-        'playToggle',
-        'volumePanel',
-        'currentTimeDisplay',
-        'timeDivider',
-        'durationDisplay',
-        'progressControl',
-        'liveDisplay',
-        'remainingTimeDisplay',
-        'customControlSpacer',
-        'playbackRateMenuButton',
-        'chaptersButton',
-        'descriptionsButton',
-        'subsCapsButton',
-        'audioTrackButton',
-        'fullscreenToggle'
-      ]
-    },
-    html5: {
-      nativeTextTracks: false,
-      nativeAudioTracks: true,
-      nativeVideoTracks: false
-    },
-    userActions: {
-      hotkeys: {
-        volumeStep: 0.1,
-        seekStep: 5,
-        enableNumbers: true,
-        enableVolumeScroll: true,
-        customKeys: {
-          toggleSidebar: {
-            key: (e: KeyboardEvent) => {
-              // 'S' key
-              return e.which === 83;
-            },
-            handler: (player: VideoJsPlayer, options: any, e: KeyboardEvent) => {
-              toggleSidebar();
-            }
+  
+  // Log container dimensions
+  const containerWidth = videoContainerElement.clientWidth;
+  const containerHeight = videoContainerElement.clientHeight;
+  console.log(`[VideoJSPlayer] Container dimensions: ${containerWidth}x${containerHeight}`);
+  
+  // Validate video source
+  if (!props.src) {
+    console.error('[VideoJSPlayer] No video source provided');
+    return;
+  }
+  
+  console.log(`[VideoJSPlayer] Video source: ${props.src}`);
+  
+  // Find the video element
+  const videoElementRef = videoElement.value;
+  if (!videoElementRef) {
+    console.error('[VideoJSPlayer] Video element is null');
+    return;
+  }
+  
+  // Force layout recalculation
+  void videoElementRef.offsetHeight;
+  
+  // Clear any existing players
+  if (player.value) {
+    player.value.dispose();
+    player.value = null;
+  }
+  
+  try {
+    console.log('[VideoJSPlayer] Creating new VideoJS player instance');
+    
+    // Initialize the player with explicit dimensions
+    const options = {
+      controls: true,
+      autoplay: false,
+      preload: 'auto',
+      fluid: true,
+      responsive: true,
+      playbackRates: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
+      width: containerWidth || 640,
+      height: containerHeight || 360,
+      sources: [{
+        src: props.src,
+        type: 'video/mp4'
+      }]
+    };
+    
+    console.log('[VideoJSPlayer] Player options:', options);
+    
+    // Create player instance
+    player.value = videojs(videoElementRef, options);
+    
+    // Set up the ready event handler
+    player.value.on('ready', () => {
+      console.log('[VideoJSPlayer] Player is ready!');
+      console.log(`[VideoJSPlayer] Player dimensions: ${playerMethods.width()}x${playerMethods.height()}`);
+      
+      // Update UI to show player is ready
+      if (debugMode.value && videoContainer.value) {
+        const debugEl = document.createElement('div');
+        debugEl.className = 'player-ready-indicator';
+        debugEl.textContent = 'Player Ready!';
+        debugEl.style.cssText = 'position: absolute; top: 50px; left: 50%; transform: translateX(-50%); background: green; color: white; padding: 5px 10px; border-radius: 4px; z-index: 1000;';
+        videoContainer.value.appendChild(debugEl);
+        
+        // Remove indicator after 5 seconds
+        setTimeout(() => {
+          if (videoContainer.value?.contains(debugEl)) {
+            videoContainer.value.removeChild(debugEl);
           }
-        }
+        }, 5000);
       }
-    }
-  });
-
-  // Add event listeners
-  player.value.on('ready', () => {
-    emit('ready', playerMethods);
-    
-    // Set initial time if provided
-    if (props.startTime > 0) {
-      player.value?.currentTime(props.startTime);
-    }
-    
-    // Load subtitles
-    loadSubtitles();
-    
-    // Setup subtitle observer for Yomichan compatibility
-    setupSubtitleObserver();
-  });
-
-  // Standard events
-  player.value.on('play', () => emit('play'));
-  player.value.on('pause', () => emit('pause'));
-  player.value.on('timeupdate', () => emit('timeupdate', player.value?.currentTime() || 0));
-  player.value.on('ended', () => emit('ended'));
-  player.value.on('error', (error: Error) => {
-    // Handle videojs errors
-    let errorMessage = 'Video playback error';
-    const errorEvent = error as any;
-    
-    // Check if it's a MediaError - now using the properly typed error method
-    if (player.value) {
-      const mediaError = player.value.error();
-      if (mediaError) {
-        switch (mediaError.code) {
-          case 1: // MEDIA_ERR_ABORTED
-            errorMessage = 'You aborted the video playback';
-            break;
-          case 2: // MEDIA_ERR_NETWORK
-            errorMessage = 'A network error caused the video download to fail';
-            break;
-          case 3: // MEDIA_ERR_DECODE
-            errorMessage = 'The video playback was aborted due to a corruption problem';
-            break;
-          case 4: // MEDIA_ERR_SRC_NOT_SUPPORTED
-            errorMessage = 'No compatible source was found for this video';
-            break;
-          default:
-            errorMessage = `Video error: ${mediaError.message || 'Unknown error'}`;
-        }
+      
+      emit('ready', playerMethods);
+      
+      // Set initial time if provided
+      if (props.startTime > 0) {
+        console.log(`[VideoJSPlayer] Setting initial time to ${props.startTime}`);
+        player.value?.currentTime(props.startTime);
       }
-    }
+      
+      // Load subtitles
+      loadSubtitles();
+      
+      // Setup subtitle observer for Yomichan compatibility
+      setupSubtitleObserver();
+    });
     
+    // Add error handler
+    player.value.on('error', () => {
+      const playerError = player.value?.error();
+      console.error('[VideoJSPlayer] Player error:', playerError && playerError.message);
+      emit('error', new Error(playerError ? playerError.message : 'Unknown player error'));
+    });
+    
+  } catch (error: unknown) {
+    console.error('[VideoJSPlayer] Error initializing player:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     emit('error', new Error(errorMessage));
-  });
-  player.value.on('fullscreenchange', () => emit('fullscreen-change', player.value?.isFullscreen() || false));
-  player.value.on('volumechange', () => emit('volume-change', {
-    volume: player.value?.volume() || 0,
-    muted: player.value?.muted() || false
-  }));
-  
-  // Track change events
-  player.value.textTracks()?.addEventListener('change', handleTextTrackChange);
-  if (player.value.audioTracks) {
-    player.value.audioTracks()?.addEventListener('change', handleAudioTrackChange);
   }
-  
-  // Setup word click handler for Yomichan compatibility
-  await nextTick();
-  setupWordClickHandler();
 });
 
 // Clean up on component unmount
@@ -412,40 +345,10 @@ function loadSubtitles() {
     player.value.removeRemoteTextTrack(player.value.textTracks()[i]);
   }
 
-  // Add new subtitle tracks
+  // Add new subtitle tracks using native text tracks
   props.subtitles.forEach((subtitle, index) => {
-    if (subtitle.format === 'ass') {
-      // Check if the ASS plugin is available before trying to use it
-      if (player.value && typeof (player.value as any).ass === 'function') {
-        try {
-          // Add ASS subtitles using videojs-ass plugin
-          (player.value as any).ass({
-            src: subtitle.src,
-            label: subtitle.label || subtitle.language,
-            srclang: subtitle.language,
-            delay: subtitle.delay || 0,
-            enableSvg: false, // Disable SVG for better Yomichan compatibility
-            fontSize: '24px', // Larger default font size
-            fontFamily: 'Arial, sans-serif',
-            fontWeight: 'normal',
-            color: '#FFFFFF',
-            backgroundColor: 'rgba(0, 0, 0, 0.7)',
-            textShadow: '2px 2px 2px rgba(0, 0, 0, 0.8)'
-          });
-          console.log('ASS subtitle loaded successfully:', subtitle.src);
-        } catch (e) {
-          console.error('Error loading ASS subtitle:', e);
-          // Fall back to standard subtitles
-          addStandardSubtitle(subtitle, index);
-        }
-      } else {
-        console.warn('videojs-ass plugin not available, falling back to standard subtitles');
-        addStandardSubtitle(subtitle, index);
-      }
-    } else {
-      // Add standard WebVTT or SRT subtitles
-      addStandardSubtitle(subtitle, index);
-    }
+    // Add all subtitles as standard WebVTT or SRT subtitles
+    addStandardSubtitle(subtitle, index);
   });
   
   // Setup word click handler again after loading subtitles
@@ -457,11 +360,20 @@ function loadSubtitles() {
 // Helper function to add standard subtitles
 function addStandardSubtitle(subtitle: any, index: number) {
   if (player.value) {
+    // Convert subtitle format from ASS to VTT if needed
+    let src = subtitle.src;
+    let label = subtitle.label || subtitle.language;
+    
+    // Mark ASS subtitles in the label for user information
+    if (subtitle.format === 'ass') {
+      label = `${label} (ASS - limited styling)`;
+    }
+    
     player.value.addRemoteTextTrack({
       kind: 'subtitles',
-      src: subtitle.src,
+      src: src,
       srclang: subtitle.language,
-      label: subtitle.label || subtitle.language,
+      label: label,
       default: index === 0
     }, false);
   }
@@ -472,7 +384,7 @@ function setupWordClickHandler() {
   if (!videoContainer.value) return;
 
   // Add click event listener to subtitle container
-  const subtitleContainer = videoContainer.value.querySelector('.vjs-ass-subtitles');
+  const subtitleContainer = videoContainer.value.querySelector('.vjs-text-track-display');
   if (subtitleContainer) {
     subtitleContainer.addEventListener('click', (event) => {
       const target = event.target as HTMLElement;
@@ -494,7 +406,7 @@ function setupSubtitleObserver() {
   const checkForSubtitleContainer = () => {
     if (!videoContainer.value) return;
     
-    const subtitleContainer = videoContainer.value.querySelector<HTMLElement>('.vjs-ass-subtitles, .vjs-text-track-display');
+    const subtitleContainer = videoContainer.value.querySelector<HTMLElement>('.vjs-text-track-display');
     
     if (subtitleContainer) {
       // Create observer to watch for changes to subtitles
@@ -540,18 +452,6 @@ function makeNodeSelectable(element: HTMLElement) {
   });
 }
 
-// Helper function to load external scripts
-function loadExternalScript(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = src;
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
-    document.head.appendChild(script);
-  });
-}
-
 // Expose player methods to parent
 defineExpose(playerMethods);
 </script>
@@ -561,12 +461,24 @@ defineExpose(playerMethods);
   position: relative;
   width: 100%;
   height: 100%;
+  min-height: 300px; /* Ensure minimum height */
   transition: width 0.3s ease, margin-right 0.3s ease;
+  background-color: #000; /* Add background color */
+  display: flex; /* Use flexbox for better child element sizing */
+  flex-direction: column;
+  justify-content: center;
 }
 
 .video-container.sidebar-active {
   width: calc(100% - 350px);
   margin-right: 350px;
+}
+
+/* Make the video element take full container size */
+.video-container .video-js {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 300px; /* Ensure minimum height */
 }
 
 /* Sidebar toggle button */
@@ -593,8 +505,6 @@ defineExpose(playerMethods);
 }
 
 /* Make subtitles scannable by Yomichan */
-.vjs-ass-subtitles span,
-.vjs-ass-subtitles div,
 .vjs-text-track-display span,
 .vjs-text-track-display div {
   cursor: text !important;
@@ -602,17 +512,9 @@ defineExpose(playerMethods);
   pointer-events: auto !important;
 }
 
-.vjs-ass-subtitles span:hover,
 .vjs-text-track-display span:hover {
   text-decoration: underline;
   opacity: 0.9;
-}
-
-/* Increase subtitle size and improve readability */
-.vjs-ass-subtitles {
-  font-size: 24px !important;
-  line-height: 1.4 !important;
-  text-shadow: 2px 2px 2px rgba(0, 0, 0, 0.8) !important;
 }
 
 /* Ensure subtitles are visible and properly positioned */
@@ -633,6 +535,9 @@ defineExpose(playerMethods);
   border-radius: 4px !important;
   max-width: 90% !important;
   margin: 0 auto !important;
+  font-size: 20px !important;
+  line-height: 1.4 !important;
+  text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.8) !important;
 }
 
 /* Responsive adjustments */
@@ -641,5 +546,32 @@ defineExpose(playerMethods);
     width: 100%;
     margin-right: 0;
   }
+}
+
+/* Debug overlay */
+.debug-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  padding: 5px 10px;
+  font-size: 12px;
+  z-index: 2000;
+  pointer-events: none;
+}
+
+/* Error message */
+.player-error {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: rgba(255, 0, 0, 0.7);
+  color: white;
+  padding: 10px 20px;
+  border-radius: 4px;
+  text-align: center;
+  max-width: 80%;
 }
 </style> 

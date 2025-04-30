@@ -145,7 +145,15 @@ const flickityRef = ref<any>(null)
 
 // Video source
 const videoSource = computed(() => {
-  return props.videoUrl || ''
+  if (!props.videoUrl) return '';
+  
+  // If the URL is already a full URL (http/https), return it as is
+  if (props.videoUrl.startsWith('http')) {
+    return props.videoUrl;
+  }
+  
+  // Otherwise, construct the API URL for streaming
+  return `/api/videos/stream/${encodeURIComponent(props.videoUrl)}`;
 })
 
 // Navigation functions

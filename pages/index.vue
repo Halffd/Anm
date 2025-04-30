@@ -378,7 +378,7 @@ function handleToggleCaptionsPanel(visible: boolean) {
       <VideoPlayer
         v-if="selectedVideo"
         ref="videoPlayerRef"
-        :video-url="selectedVideo.path || selectedVideo.url"
+        :video-url="selectedVideo.path"
         :captions="captionsStore.captions"
         :current-time="captionsStore.currentTime"
         @timeupdate="captionsStore.setCurrentTime"
