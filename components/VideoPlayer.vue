@@ -145,15 +145,33 @@ const flickityRef = ref<any>(null)
 
 // Video source
 const videoSource = computed(() => {
-  if (!props.videoUrl) return '';
+  if (!props.videoUrl) {
+    console.log('[VideoPlayer] No video URL provided');
+    return '';
+  }
   
   // If the URL is already a full URL (http/https), return it as is
   if (props.videoUrl.startsWith('http')) {
+    console.log('[VideoPlayer] Using full URL:', props.videoUrl);
+    return props.videoUrl;
+  }
+  
+  // If the URL is already a blob URL, return it as is
+  if (props.videoUrl.startsWith('blob:')) {
+    console.log('[VideoPlayer] Using blob URL:', props.videoUrl);
+    return props.videoUrl;
+  }
+  
+  // If the URL is already an API URL, return it as is
+  if (props.videoUrl.startsWith('/api/videos/stream/')) {
+    console.log('[VideoPlayer] Using API URL:', props.videoUrl);
     return props.videoUrl;
   }
   
   // Otherwise, construct the API URL for streaming
-  return `/api/videos/stream/${encodeURIComponent(props.videoUrl)}`;
+  const apiUrl = `/api/videos/stream/${encodeURIComponent(props.videoUrl)}`;
+  console.log('[VideoPlayer] Constructed API URL:', apiUrl);
+  return apiUrl;
 })
 
 // Navigation functions
@@ -549,14 +567,14 @@ function renderPlaylistItem(video: VideoInfo) {
         <span>Playlist</span>
       </button>
     </div>
-    
+
     <div class="video-wrapper">
       <VideoJSPlayer
         ref="player"
         :src="videoSource"
         :subtitles="subtitleTracks"
-        :width="1280"
-        :height="720"
+        :width="1920"
+        :height="1080"
         :autoplay="false"
         :controls="true"
         :loop="false"
@@ -578,30 +596,8 @@ function renderPlaylistItem(video: VideoInfo) {
         @word-click="handleWordClick"
         @toggle-sidebar="toggleSidebar"
       />
-      
-      <!-- Use the VideoControls component -->
-      <VideoControls 
-        v-if="(showControls || isHovering) && !controlsHidden"
-        :is-playing="isPlaying"
-        :current-time="currentTime"
-        :duration="videoDuration"
-        :volume="volume"
-        :is-muted="isMuted"
-        :is-fullscreen="isFullscreen"
-        :show-settings="showSettingsMenu"
-        @play="togglePlayPause()"
-        @pause="togglePlayPause()"
-        @seek="seek"
-        @volume-change="handleVolumeChange"
-        @toggle-mute="toggleMute"
-        @toggle-fullscreen="toggleFullscreen"
-        @toggle-settings="toggleSettingsMenu"
-        @toggle-captions="handleToggleCaptions($event)"
-        @subtitle-upload="handleSubtitleUpload"
-        @toggle-captions-panel="handleToggleCaptionsPanel($event)"
-      />
     </div>
-    
+
     <!-- Sidebar with animation -->
     <transition name="slide">
       <div v-if="sidebarActive" class="sidebar">
@@ -795,6 +791,12 @@ function renderPlaylistItem(video: VideoInfo) {
   height: 100%;
   display: flex;
   background-color: #000;
+}
+.video-wrapper {
+  width: 100% !important;
+  height: 100% !important;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Navigation bar */

@@ -1,6 +1,6 @@
 <template>
-  <div 
-    class="video-container" 
+  <div
+    class="video-container"
     ref="videoContainer"
     :class="{ 'sidebar-active': sidebarActive }"
   >
@@ -8,7 +8,7 @@
     <div v-if="debugMode" class="debug-overlay">
       Size: {{ containerSize.width }}x{{ containerSize.height }}
     </div>
-    
+
     <video
       ref="videoElement"
       class="video-js vjs-default-skin vjs-big-play-centered"
@@ -17,9 +17,9 @@
       :width="width"
       :height="height"
     ></video>
-    
+
     <!-- Custom sidebar toggle button -->
-    <button 
+    <button
       v-if="showSidebarToggle"
       class="vjs-sidebar-toggle"
       @click="toggleSidebar"
@@ -143,54 +143,69 @@ const playerMethods = {
       }
     }
   },
-  width: () => videoElement.value?.clientWidth || 0,
-  height: () => videoElement.value?.clientHeight || 0,
+  width: () => 1920,
+  height: () => 1080,
   toggleSidebar
 };
 
 // Initialize Video.js player
 onMounted(() => {
   console.log('[VideoJSPlayer] onMounted - Starting player initialization');
-  
+
+  // Check if video.js is available
+  if (typeof videojs === 'undefined') {
+    console.error('[VideoJSPlayer] video.js is not loaded');
+    emit('error', new Error('Video.js library is not loaded'));
+    return;
+  }
+
   // Ensure container exists
   const videoContainerElement = videoContainer.value;
   if (!videoContainerElement) {
     console.error('[VideoJSPlayer] Video container element is null');
     return;
   }
-  
+
   // Log container dimensions
   const containerWidth = videoContainerElement.clientWidth;
   const containerHeight = videoContainerElement.clientHeight;
   console.log(`[VideoJSPlayer] Container dimensions: ${containerWidth}x${containerHeight}`);
-  
+
+  console.log('[CRITICAL] Video source value:', props.src);
   // Validate video source
   if (!props.src) {
     console.error('[VideoJSPlayer] No video source provided');
     return;
   }
-  
+
   console.log(`[VideoJSPlayer] Video source: ${props.src}`);
-  
+
   // Find the video element
   const videoElementRef = videoElement.value;
   if (!videoElementRef) {
     console.error('[VideoJSPlayer] Video element is null');
     return;
   }
-  
+
+  // Ensure video element is properly initialized
+  if (!(videoElementRef instanceof HTMLVideoElement)) {
+    console.error('[VideoJSPlayer] Video element is not an HTMLVideoElement');
+    return;
+  }
+
   // Force layout recalculation
   void videoElementRef.offsetHeight;
-  
+
   // Clear any existing players
   if (player.value) {
+    console.log('[VideoJSPlayer] Disposing existing player');
     player.value.dispose();
     player.value = null;
   }
-  
+
   try {
     console.log('[VideoJSPlayer] Creating new VideoJS player instance');
-    
+
     // Initialize the player with explicit dimensions
     const options = {
       controls: true,
@@ -206,17 +221,45 @@ onMounted(() => {
         type: 'video/mp4'
       }]
     };
-    
+
     console.log('[VideoJSPlayer] Player options:', options);
-    
+
     // Create player instance
     player.value = videojs(videoElementRef, options);
-    
+
+    // Add source error handler
+    player.value.on('error', (event: Event) => {
+      const error = player.value?.error();
+      console.error('[VideoJSPlayer] Source error:', error);
+      if (error) {
+        console.error('[VideoJSPlayer] Error code:', error.code);
+        console.error('[VideoJSPlayer] Error message:', error.message);
+      }
+    });
+
+    // Add source loaded handler
+    player.value.on('loadedmetadata', () => {
+      console.log('[VideoJSPlayer] Source metadata loaded');
+      if (videoElementRef) {
+        console.log('[VideoJSPlayer] Video dimensions:', videoElementRef.videoWidth, 'x', videoElementRef.videoHeight);
+      }
+    });
+
+    // Add source loading handler
+    player.value.on('loadstart', () => {
+      console.log('[VideoJSPlayer] Starting to load video source');
+    });
+
+    // Add source loaded handler
+    player.value.on('loadeddata', () => {
+      console.log('[VideoJSPlayer] First frame of video loaded');
+    });
+
     // Set up the ready event handler
     player.value.on('ready', () => {
       console.log('[VideoJSPlayer] Player is ready!');
       console.log(`[VideoJSPlayer] Player dimensions: ${playerMethods.width()}x${playerMethods.height()}`);
-      
+
       // Update UI to show player is ready
       if (debugMode.value && videoContainer.value) {
         const debugEl = document.createElement('div');
@@ -224,7 +267,7 @@ onMounted(() => {
         debugEl.textContent = 'Player Ready!';
         debugEl.style.cssText = 'position: absolute; top: 50px; left: 50%; transform: translateX(-50%); background: green; color: white; padding: 5px 10px; border-radius: 4px; z-index: 1000;';
         videoContainer.value.appendChild(debugEl);
-        
+
         // Remove indicator after 5 seconds
         setTimeout(() => {
           if (videoContainer.value?.contains(debugEl)) {
@@ -232,29 +275,29 @@ onMounted(() => {
           }
         }, 5000);
       }
-      
+
       emit('ready', playerMethods);
-      
+
       // Set initial time if provided
       if (props.startTime > 0) {
         console.log(`[VideoJSPlayer] Setting initial time to ${props.startTime}`);
         player.value?.currentTime(props.startTime);
       }
-      
+
       // Load subtitles
       loadSubtitles();
-      
+
       // Setup subtitle observer for Yomichan compatibility
       setupSubtitleObserver();
     });
-    
+
     // Add error handler
     player.value.on('error', () => {
       const playerError = player.value?.error();
       console.error('[VideoJSPlayer] Player error:', playerError && playerError.message);
       emit('error', new Error(playerError ? playerError.message : 'Unknown player error'));
     });
-    
+
   } catch (error: unknown) {
     console.error('[VideoJSPlayer] Error initializing player:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -270,12 +313,12 @@ onBeforeUnmount(() => {
     if (player.value.audioTracks) {
       player.value.audioTracks().removeEventListener('change', handleAudioTrackChange);
     }
-    
+
     // Disconnect observer
     if (subtitleObserver.value) {
       subtitleObserver.value.disconnect();
     }
-    
+
     // Dispose player
     player.value.dispose();
   }
@@ -305,34 +348,34 @@ watch(() => props.src, (newSrc) => {
 // Handle text track change
 function handleTextTrackChange() {
   if (!player.value) return;
-  
+
   const tracks = player.value.textTracks();
   let activeTrack = -1;
-  
+
   for (let i = 0; i < tracks.length; i++) {
     if (tracks[i].mode === 'showing') {
       activeTrack = i;
       break;
     }
   }
-  
+
   emit('subtitle-change', activeTrack);
 }
 
 // Handle audio track change
 function handleAudioTrackChange() {
   if (!player.value || !player.value.audioTracks) return;
-  
+
   const tracks = player.value.audioTracks();
   let activeTrack = -1;
-  
+
   for (let i = 0; i < tracks.length; i++) {
     if (tracks[i].enabled) {
       activeTrack = i;
       break;
     }
   }
-  
+
   emit('audio-track-change', activeTrack);
 }
 
@@ -350,7 +393,7 @@ function loadSubtitles() {
     // Add all subtitles as standard WebVTT or SRT subtitles
     addStandardSubtitle(subtitle, index);
   });
-  
+
   // Setup word click handler again after loading subtitles
   nextTick(() => {
     setupWordClickHandler();
@@ -363,12 +406,12 @@ function addStandardSubtitle(subtitle: any, index: number) {
     // Convert subtitle format from ASS to VTT if needed
     let src = subtitle.src;
     let label = subtitle.label || subtitle.language;
-    
+
     // Mark ASS subtitles in the label for user information
     if (subtitle.format === 'ass') {
       label = `${label} (ASS - limited styling)`;
     }
-    
+
     player.value.addRemoteTextTrack({
       kind: 'subtitles',
       src: src,
@@ -401,13 +444,13 @@ function setupWordClickHandler() {
 // Setup MutationObserver to watch for subtitle changes
 function setupSubtitleObserver() {
   if (!videoContainer.value) return;
-  
+
   // Find or wait for the subtitle container
   const checkForSubtitleContainer = () => {
     if (!videoContainer.value) return;
-    
+
     const subtitleContainer = videoContainer.value.querySelector<HTMLElement>('.vjs-text-track-display');
-    
+
     if (subtitleContainer) {
       // Create observer to watch for changes to subtitles
       subtitleObserver.value = new MutationObserver((mutations) => {
@@ -422,13 +465,13 @@ function setupSubtitleObserver() {
           }
         });
       });
-      
+
       // Start observing
       subtitleObserver.value.observe(subtitleContainer, {
         childList: true,
         subtree: true
       });
-      
+
       // Make existing nodes selectable
       makeNodeSelectable(subtitleContainer);
     } else {
@@ -436,7 +479,7 @@ function setupSubtitleObserver() {
       setTimeout(checkForSubtitleContainer, 500);
     }
   };
-  
+
   checkForSubtitleContainer();
 }
 
@@ -445,7 +488,7 @@ function makeNodeSelectable(element: HTMLElement) {
   // Add necessary styles
   element.style.userSelect = 'text';
   element.style.cursor = 'text';
-  
+
   // Process child elements
   Array.from(element.children).forEach(child => {
     makeNodeSelectable(child as HTMLElement);
@@ -574,4 +617,4 @@ defineExpose(playerMethods);
   text-align: center;
   max-width: 80%;
 }
-</style> 
+</style>

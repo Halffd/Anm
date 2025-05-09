@@ -97,15 +97,9 @@ function playSelected() {
   if (selectedList.length === 0) return
   
   if (selectedList.length === 1) {
-    emit('select', {
-      ...selectedList[0],
-      path: `/api/videos/stream/${encodeURIComponent(selectedList[0].path)}`
-    })
+    emit('select', selectedList[0])
   } else {
-    emit('playlist', selectedList.map(video => ({
-      ...video,
-      path: `/api/videos/stream/${encodeURIComponent(video.path)}`
-    })))
+    emit('playlist', selectedList)
   }
   clearSelection()
 }
