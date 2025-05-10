@@ -34,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
+import { ref, onMounted, onBeforeUnmount, watch, nextTick, computed } from 'vue';
 import videojs from 'video.js';
 import 'video.js/dist/video-js.css';
 import type { VideoJsPlayer } from 'video.js';
@@ -48,6 +48,12 @@ const props = defineProps<{
     label?: string;
     format?: string;
     delay?: number;
+    captions?: Array<{
+      id: string;
+      startTime: number;
+      endTime: number;
+      text: string;
+    }>;
   }>;
   width: number;
   height: number;
@@ -86,6 +92,7 @@ const videoContainer = ref<HTMLDivElement | null>(null);
 const videoElement = ref<HTMLVideoElement | null>(null);
 const player = ref<VideoJsPlayer | null>(null);
 const subtitleObserver = ref<MutationObserver | null>(null);
+const captionPlugin = ref(null);
 
 // Define debug mode for troubleshooting
 const debugMode = ref(true);
@@ -145,7 +152,32 @@ const playerMethods = {
   },
   width: () => 1920,
   height: () => 1080,
-  toggleSidebar
+  toggleSidebar,
+  updateCaptions: () => {
+    if (captionPlugin.value) {
+      captionPlugin.value.updateCaption();
+    } else {
+      loadSubtitles();
+    }
+  },
+  toggleCaptionPosition: (trackIndex: number, position: string) => {
+    if (captionPlugin.value && props.subtitles[trackIndex]) {
+      const captionData = captionPlugin.value.getCaptionData();
+      const trackCaptions = props.subtitles[trackIndex].captions;
+
+      if (trackCaptions && Array.isArray(trackCaptions)) {
+        const captionIds = trackCaptions.map(c => c.id);
+
+        captionData.forEach(caption => {
+          if (captionIds.includes(caption.id)) {
+            caption.position = position;
+          }
+        });
+
+        captionPlugin.value.updateCaption();
+      }
+    }
+  },
 };
 
 // Initialize Video.js player
@@ -159,122 +191,70 @@ onMounted(() => {
     return;
   }
 
-  // Ensure container exists
-  const videoContainerElement = videoContainer.value;
-  if (!videoContainerElement) {
-    console.error('[VideoJSPlayer] Video container element is null');
-    return;
-  }
-
-  // Log container dimensions
-  const containerWidth = videoContainerElement.clientWidth;
-  const containerHeight = videoContainerElement.clientHeight;
-  console.log(`[VideoJSPlayer] Container dimensions: ${containerWidth}x${containerHeight}`);
-
-  console.log('[CRITICAL] Video source value:', props.src);
-  // Validate video source
-  if (!props.src) {
-    console.error('[VideoJSPlayer] No video source provided');
-    return;
-  }
-
-  console.log(`[VideoJSPlayer] Video source: ${props.src}`);
-
-  // Find the video element
-  const videoElementRef = videoElement.value;
-  if (!videoElementRef) {
-    console.error('[VideoJSPlayer] Video element is null');
-    return;
-  }
-
-  // Ensure video element is properly initialized
-  if (!(videoElementRef instanceof HTMLVideoElement)) {
-    console.error('[VideoJSPlayer] Video element is not an HTMLVideoElement');
-    return;
-  }
-
-  // Force layout recalculation
-  void videoElementRef.offsetHeight;
-
-  // Clear any existing players
-  if (player.value) {
-    console.log('[VideoJSPlayer] Disposing existing player');
-    player.value.dispose();
-    player.value = null;
-  }
-
   try {
-    console.log('[VideoJSPlayer] Creating new VideoJS player instance');
+    // Load jQuery and videojs-caption plugin
+    const jqueryScript = document.createElement('script');
+    jqueryScript.src = 'https://code.jquery.com/jquery-3.6.0.min.js';
+    document.head.appendChild(jqueryScript);
 
-    // Initialize the player with explicit dimensions
-    const options = {
+    // Load the caption plugin CSS
+    const captionCss = document.createElement('link');
+    captionCss.rel = 'stylesheet';
+    captionCss.href = '/css/videojs.caption.css';
+    document.head.appendChild(captionCss);
+
+    // Load the caption plugin JS
+    const captionScript = document.createElement('script');
+    captionScript.src = '/js/videojs.caption.js';
+    document.head.appendChild(captionScript);
+
+    // Initialize the player
+    player.value = videojs(videoElement.value, {
       controls: true,
       autoplay: false,
       preload: 'auto',
       fluid: true,
       responsive: true,
       playbackRates: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
-      width: containerWidth || 640,
-      height: containerHeight || 360,
+      width: containerSize.value.width || 640,
+      height: containerSize.value.height || 360,
       sources: [{
         src: props.src,
         type: 'video/mp4'
       }]
+    });
+
+    // Initialize the caption plugin when jQuery and plugin are loaded
+    const initCaptionPlugin = () => {
+      if (window.jQuery && player.value.caption) {
+        console.log('[VideoJSPlayer] Initializing caption plugin');
+        captionPlugin.value = player.value.caption({
+          captionSize: 3,
+          captionStyle: {
+            'background-color': 'rgba(0,0,0,0.8)',
+            'color': 'white',
+            'padding': '3px'
+          },
+          captionType: 'pop-on',
+          data: [] // Will be populated when subtitles are loaded
+        });
+
+        // Load any existing subtitles
+        if (props.subtitles.length > 0) {
+          loadSubtitles();
+        }
+      } else {
+        // Retry after a short delay if jQuery or plugin not loaded yet
+        setTimeout(initCaptionPlugin, 100);
+      }
     };
 
-    console.log('[VideoJSPlayer] Player options:', options);
-
-    // Create player instance
-    player.value = videojs(videoElementRef, options);
-
-    // Add source error handler
-    player.value.on('error', (event: Event) => {
-      const error = player.value?.error();
-      console.error('[VideoJSPlayer] Source error:', error);
-      if (error) {
-        console.error('[VideoJSPlayer] Error code:', error.code);
-        console.error('[VideoJSPlayer] Error message:', error.message);
-      }
-    });
-
-    // Add source loaded handler
-    player.value.on('loadedmetadata', () => {
-      console.log('[VideoJSPlayer] Source metadata loaded');
-      if (videoElementRef) {
-        console.log('[VideoJSPlayer] Video dimensions:', videoElementRef.videoWidth, 'x', videoElementRef.videoHeight);
-      }
-    });
-
-    // Add source loading handler
-    player.value.on('loadstart', () => {
-      console.log('[VideoJSPlayer] Starting to load video source');
-    });
-
-    // Add source loaded handler
-    player.value.on('loadeddata', () => {
-      console.log('[VideoJSPlayer] First frame of video loaded');
-    });
+    initCaptionPlugin();
 
     // Set up the ready event handler
     player.value.on('ready', () => {
       console.log('[VideoJSPlayer] Player is ready!');
       console.log(`[VideoJSPlayer] Player dimensions: ${playerMethods.width()}x${playerMethods.height()}`);
-
-      // Update UI to show player is ready
-      if (debugMode.value && videoContainer.value) {
-        const debugEl = document.createElement('div');
-        debugEl.className = 'player-ready-indicator';
-        debugEl.textContent = 'Player Ready!';
-        debugEl.style.cssText = 'position: absolute; top: 50px; left: 50%; transform: translateX(-50%); background: green; color: white; padding: 5px 10px; border-radius: 4px; z-index: 1000;';
-        videoContainer.value.appendChild(debugEl);
-
-        // Remove indicator after 5 seconds
-        setTimeout(() => {
-          if (videoContainer.value?.contains(debugEl)) {
-            videoContainer.value.removeChild(debugEl);
-          }
-        }, 5000);
-      }
 
       emit('ready', playerMethods);
 
@@ -283,9 +263,6 @@ onMounted(() => {
         console.log(`[VideoJSPlayer] Setting initial time to ${props.startTime}`);
         player.value?.currentTime(props.startTime);
       }
-
-      // Load subtitles
-      loadSubtitles();
 
       // Setup subtitle observer for Yomichan compatibility
       setupSubtitleObserver();
@@ -383,16 +360,52 @@ function handleAudioTrackChange() {
 function loadSubtitles() {
   if (!player.value) return;
 
-  // Remove existing text tracks
-  for (let i = player.value.textTracks().length - 1; i >= 0; i--) {
-    player.value.removeRemoteTextTrack(player.value.textTracks()[i]);
-  }
+  // Check if we should use the caption plugin or native text tracks
+  if (captionPlugin.value) {
+    console.log('[VideoJSPlayer] Loading subtitles with caption plugin');
 
-  // Add new subtitle tracks using native text tracks
-  props.subtitles.forEach((subtitle, index) => {
-    // Add all subtitles as standard WebVTT or SRT subtitles
-    addStandardSubtitle(subtitle, index);
-  });
+    // Convert subtitles to the format expected by the caption plugin
+    const captionData = [];
+
+    props.subtitles.forEach((subtitle, index) => {
+      // If subtitle has captions array, use it directly
+      if (subtitle.captions && Array.isArray(subtitle.captions)) {
+        const position = index === 0 ? 'HB' : 'HT'; // First track at bottom, second at top
+
+        subtitle.captions.forEach(caption => {
+          captionData.push({
+            id: caption.id,
+            startTime: caption.startTime * 1000, // Convert to milliseconds
+            endTime: caption.endTime * 1000,     // Convert to milliseconds
+            data: caption.text,
+            position: position,
+            alignment: 'C'
+          });
+        });
+      } else {
+        // For subtitles without pre-parsed captions, add as native text tracks
+        addStandardSubtitle(subtitle, index);
+      }
+    });
+
+    // Load captions into the plugin if we have any
+    if (captionData.length > 0) {
+      captionPlugin.value.loadNewCaption(captionData);
+    }
+  } else {
+    console.log('[VideoJSPlayer] Loading subtitles with native text tracks');
+
+    // Remove existing text tracks
+    for (let i = player.value.textTracks().length - 1; i >= 0; i--) {
+      player.value.removeRemoteTextTrack(player.value.textTracks()[i]);
+    }
+
+    // Add new subtitle tracks using native text tracks
+    props.subtitles.forEach((subtitle, index) => {
+      // Add all subtitles as standard WebVTT or SRT subtitles
+      addStandardSubtitle(subtitle, index);
+    });
+  }
 
   // Setup word click handler again after loading subtitles
   nextTick(() => {
@@ -499,7 +512,7 @@ function makeNodeSelectable(element: HTMLElement) {
 defineExpose(playerMethods);
 </script>
 
-<style>
+<style scoped>
 .video-container {
   position: relative;
   width: 100%;

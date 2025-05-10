@@ -14,6 +14,7 @@ import { useVideoPlayer } from '~/composables/useVideoPlayer'
 import { useCaptionsControl } from '~/composables/useCaptionsControl'
 import { useVideoMetadata } from '~/composables/useVideoMetadata'
 import VideoJSPlayer from '~/components/VideoJSPlayer.vue'
+import SubtitleLoader from '~/components/SubtitleLoader.vue'
 import { loadSubtitleFile } from '~/utils/subtitleLoader'
 import type { VideoJsPlayer } from 'video.js'
 
@@ -71,7 +72,13 @@ const subtitleTracks = ref<Array<{
   label?: string;
   format?: string;
   delay?: number;
-}>>([])
+  captions?: Array<{
+    id: string;
+    startTime: number;
+    endTime: number;
+    text: string;
+  }>;
+}>>([]) 
 const showSubtitles = ref(true)
 
 // UI state
@@ -87,6 +94,7 @@ const sidebarMode = ref<'subtitles' | 'playlist'>('subtitles')
 const activeSubtitleTrack = ref(0)
 const fontSize = ref(1.0)
 const subtitleDelay = ref(0)
+const subtitlePositions = ref<Record<number, string>>({}) 
 
 // Playlist state
 const playlist = computed(() => props.playlist || [])
@@ -508,6 +516,95 @@ function renderPlaylistItem(video: VideoInfo) {
     </div>
   `
 }
+
+// Handle subtitles loaded event from SubtitleLoader
+function handleSubtitlesLoaded(event: any) {
+  const { trackIndex, language, title, format } = event
+  
+  // Get the loaded subtitle track from the captions store
+  const track = store.subtitleTracks[trackIndex]
+  if (!track) return
+  
+  // Create a subtitle track object for VideoJSPlayer
+  const subtitleTrack = {
+    src: '', 
+    language: language,
+    label: title,
+    format: format,
+    captions: track.captions 
+  }
+  
+  // Add to subtitle tracks
+  subtitleTracks.value.push(subtitleTrack)
+  
+  // Set default position based on track index
+  const position = trackIndex === 0 ? 'HB' : 'HT' 
+  subtitlePositions.value[trackIndex] = position
+  
+  // Update the player
+  nextTick(() => {
+    if (player.value) {
+      player.value.updateCaptions()
+    }
+  })
+  
+  // Show notification
+  emit('notify', `Subtitle track "${title}" loaded`)
+}
+
+// Handle subtitles cleared event from SubtitleLoader
+function handleSubtitlesCleared() {
+  // Clear subtitle tracks
+  subtitleTracks.value = []
+  subtitlePositions.value = {}
+  
+  // Update the player
+  nextTick(() => {
+    if (player.value) {
+      player.value.updateCaptions()
+    }
+  })
+  
+  // Show notification
+  emit('notify', 'All subtitle tracks cleared')
+}
+
+// Toggle subtitle position (HB, HT, VL, VR)
+function toggleSubtitlePosition(trackIndex: number) {
+  const positions = ['HB', 'HT', 'VL', 'VR']
+  const currentPosition = subtitlePositions.value[trackIndex] || 'HB'
+  const currentIndex = positions.indexOf(currentPosition)
+  const nextIndex = (currentIndex + 1) % positions.length
+  const nextPosition = positions[nextIndex]
+  
+  // Update position
+  subtitlePositions.value[trackIndex] = nextPosition
+  
+  // Update in player
+  if (player.value) {
+    player.value.toggleCaptionPosition(trackIndex, nextPosition)
+  }
+  
+  // Show notification
+  const positionNames = {
+    'HB': 'Bottom',
+    'HT': 'Top',
+    'VL': 'Left (Vertical)',
+    'VR': 'Right (Vertical)'
+  }
+  emit('notify', `Changed subtitle position to ${positionNames[nextPosition as keyof typeof positionNames]}`)
+}
+
+// Player event handlers
+function onPlayerReady(playerInstance: any) {
+  player.value = playerInstance
+  videoDuration.value = player.value.duration() || 0
+  
+  // Load any existing subtitles
+  if (subtitleTracks.value.length > 0) {
+    player.value.updateCaptions()
+  }
+}
 </script>
 
 <template>
@@ -625,66 +722,44 @@ function renderPlaylistItem(video: VideoInfo) {
         <div class="sidebar-content">
           <!-- Subtitles content -->
           <div v-if="sidebarMode === 'subtitles'" class="subtitles-content">
-            <!-- Subtitle tracks carousel with Flickity -->
-            <div class="subtitle-tracks">
-              <h4>Available Tracks</h4>
-              <ClientOnly>
-                <template v-if="isClient && flickityComponent?.value">
-                  <component 
-                    :is="flickityComponent.value"
-                    ref="flickityRef"
-                    :options="flickityOptions"
-                    class="subtitle-carousel"
-                  >
-                  <div 
-                    v-for="(track, index) in subtitleTracks" 
-                    :key="index"
-                    class="subtitle-track-item"
-                    :class="{ 'active': activeSubtitleTrack === index }"
-                    @click="setActiveSubtitleTrack(index)"
-                  >
-                    <div class="track-info">
-                      <div class="track-name">{{ track.label || track.language }}</div>
-                      <div class="track-language">{{ track.language }}</div>
-                    </div>
-                    <div class="track-actions">
-                      <button 
-                        class="track-toggle" 
-                        :class="{ 'active': activeSubtitleTrack === index }"
-                        @click.stop="toggleSubtitleTrack(index)"
-                      >
-                        {{ activeSubtitleTrack === index ? 'Hide' : 'Show' }}
-                      </button>
-                    </div>
+            <!-- Subtitle loader component -->
+            <SubtitleLoader 
+              @subtitles-loaded="handleSubtitlesLoaded"
+              @subtitles-cleared="handleSubtitlesCleared"
+            />
+            
+            <!-- Subtitle tracks list -->
+            <div v-if="subtitleTracks.length > 0" class="subtitle-tracks-list mt-4">
+              <h4>Track Settings</h4>
+              <div 
+                v-for="(track, index) in subtitleTracks" 
+                :key="index"
+                class="subtitle-track-item p-2 mb-2 rounded"
+                :class="{ 'active': index === activeSubtitleTrack }"
+              >
+                <div class="flex justify-between items-center">
+                  <div>
+                    <div class="font-medium">{{ track.label || `Track ${index + 1}` }}</div>
+                    <div class="text-sm text-gray-400">{{ track.language }}</div>
                   </div>
-                  </component>
-                </template>
-                <template #fallback>
-                  <div class="subtitle-carousel-fallback">
-                    <div 
-                      v-for="(track, index) in subtitleTracks" 
-                      :key="index"
-                      class="subtitle-track-item"
-                      :class="{ 'active': activeSubtitleTrack === index }"
-                      @click="setActiveSubtitleTrack(index)"
+                  <div class="flex gap-2">
+                    <button 
+                      @click="toggleSubtitlePosition(index)"
+                      class="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 rounded"
+                      title="Change position"
                     >
-                      <div class="track-info">
-                        <div class="track-name">{{ track.label || track.language }}</div>
-                        <div class="track-language">{{ track.language }}</div>
-                      </div>
-                      <div class="track-actions">
-                        <button 
-                          class="track-toggle" 
-                          :class="{ 'active': activeSubtitleTrack === index }"
-                          @click.stop="toggleSubtitleTrack(index)"
-                        >
-                          {{ activeSubtitleTrack === index ? 'Hide' : 'Show' }}
-                        </button>
-                      </div>
-                    </div>
+                      {{ subtitlePositions[index] || 'HB' }}
+                    </button>
+                    <button 
+                      @click="toggleSubtitleTrack(index)"
+                      class="px-2 py-1 text-xs rounded"
+                      :class="index === activeSubtitleTrack ? 'bg-blue-600' : 'bg-gray-700 hover:bg-gray-600'"
+                    >
+                      {{ index === activeSubtitleTrack ? 'Active' : 'Activate' }}
+                    </button>
                   </div>
-                </template>
-              </ClientOnly>
+                </div>
+              </div>
             </div>
             
             <!-- Upload new subtitle with animation -->

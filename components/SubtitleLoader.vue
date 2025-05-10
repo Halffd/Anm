@@ -9,6 +9,9 @@ const success = ref('')
 
 const hasSubtitles = computed(() => store.subtitleTracks.length > 0)
 
+// Emit events for parent components
+const emit = defineEmits(['subtitles-loaded', 'subtitles-cleared'])
+
 async function handleFileUpload(event: Event) {
   const input = event.target as HTMLInputElement
   if (!input.files || input.files.length === 0) return
@@ -57,8 +60,15 @@ async function handleFileUpload(event: Event) {
         const content = await file.text()
         const trackIndex = await store.loadCaptions(content, language, title)
         
-        if (trackIndex !== undefined) {
+        if (trackIndex !== undefined && trackIndex !== null) {
           loadedCount++
+          // Emit event to notify parent components that subtitles were loaded
+          emit('subtitles-loaded', {
+            trackIndex,
+            language,
+            title,
+            format: extension
+          })
         } else {
           error.value = `Failed to parse subtitle file: ${file.name}`
         }
@@ -80,74 +90,120 @@ async function handleFileUpload(event: Event) {
   }
 }
 
+// Handle drag and drop events
+function handleDragOver(event: DragEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+async function handleDrop(event: DragEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  
+  if (!event.dataTransfer?.files || event.dataTransfer.files.length === 0) return
+  
+  // Create a new event with the dropped files
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.multiple = true
+  
+  // Use the FileList from the drop event
+  const dT = new DataTransfer()
+  for (let i = 0; i < event.dataTransfer.files.length; i++) {
+    dT.items.add(event.dataTransfer.files[i])
+  }
+  input.files = dT.files
+  
+  // Process the files
+  await handleFileUpload({ target: input } as unknown as Event)
+}
+
 function clearSubtitles() {
   store.clearCaptions()
-  success.value = ''
+  success.value = 'Subtitles cleared'
   error.value = ''
+  // Emit event to notify parent components that subtitles were cleared
+  emit('subtitles-cleared')
 }
 </script>
 
 <template>
   <div class="subtitle-loader">
     <div class="flex flex-col gap-2">
-      <div class="flex items-center gap-2">
-        <label 
-          for="subtitle-file" 
-          class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded cursor-pointer"
-        >
-          Load Subtitles
-        </label>
+      <!-- Drag and drop area -->
+      <div 
+        class="drag-drop-area border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer"
+        @dragover="handleDragOver"
+        @drop="handleDrop"
+        @click="$refs.fileInput.click()"
+      >
+        <div class="text-lg mb-2">Drag & Drop Subtitle Files Here</div>
+        <div class="text-sm text-gray-500">Or click to browse</div>
         <input 
-          id="subtitle-file" 
+          ref="fileInput" 
           type="file" 
           accept=".srt,.vtt,.ass" 
-          @change="handleFileUpload" 
-          class="hidden"
-          multiple
-        />
-        
-        <button 
-          v-if="hasSubtitles"
-          @click="clearSubtitles" 
-          class="px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded"
+          multiple 
+          class="hidden" 
+          @change="handleFileUpload"
         >
-          Clear
-        </button>
       </div>
       
-      <div v-if="isLoading" class="text-blue-600">
-        Loading subtitles...
-      </div>
-      
-      <div v-if="error" class="text-red-600">
-        {{ error }}
-      </div>
-      
-      <div v-if="success" class="text-green-600">
-        {{ success }}
-      </div>
+      <!-- Status messages -->
+      <div v-if="isLoading" class="text-blue-500">Loading subtitles...</div>
+      <div v-if="error" class="text-red-500">{{ error }}</div>
+      <div v-if="success" class="text-green-500">{{ success }}</div>
       
       <!-- Subtitle tracks list -->
-      <div v-if="hasSubtitles" class="mt-2">
-        <div class="text-sm font-medium mb-1">Loaded Tracks:</div>
-        <div 
-          v-for="(track, index) in store.subtitleTracks" 
-          :key="index"
-          class="flex items-center gap-2 p-2 rounded hover:bg-gray-100 cursor-pointer"
-          :class="{ 'bg-blue-100': index === store.activeTrackIndex }"
-          @click="store.setActiveTrack(index)"
-        >
-          <div class="w-6 h-6 flex items-center justify-center rounded-full bg-gray-200">
-            {{ index + 1 }}
-          </div>
-          <div class="flex-1">
-            <div class="font-medium">{{ track.metadata.title }}</div>
-            <div class="text-xs text-gray-600">
-              {{ track.metadata.language }} · {{ track.captions.length }} captions
+      <div v-if="hasSubtitles" class="mt-4">
+        <div class="flex justify-between items-center mb-2">
+          <h3 class="text-lg font-semibold">Loaded Subtitle Tracks</h3>
+          <button 
+            @click="clearSubtitles" 
+            class="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-sm"
+          >
+            Clear All
+          </button>
+        </div>
+        
+        <div class="subtitle-tracks">
+          <div 
+            v-for="(track, index) in store.subtitleTracks" 
+            :key="track.id"
+            class="subtitle-track p-2 bg-gray-100 rounded mb-2 flex justify-between items-center"
+          >
+            <div>
+              <div class="font-medium">{{ track.metadata.title }}</div>
+              <div class="text-sm text-gray-600">{{ track.metadata.language }} - {{ track.captions.length }} captions</div>
+            </div>
+            <div class="flex gap-2">
+              <button 
+                @click="store.setActiveTrack(index)" 
+                class="px-2 py-1 text-xs rounded"
+                :class="index === store.activeTrackIndex ? 'bg-blue-500 text-white' : 'bg-gray-200 hover:bg-gray-300'"
+              >
+                {{ index === store.activeTrackIndex ? 'Active' : 'Set Active' }}
+              </button>
             </div>
           </div>
         </div>
       </div>
     </div>
   </div>
-</template> 
+</template>
+
+<style scoped>
+.drag-drop-area {
+  transition: all 0.2s ease;
+}
+
+.drag-drop-area:hover {
+  border-color: #4299e1;
+  background-color: rgba(66, 153, 225, 0.05);
+}
+
+.subtitle-tracks {
+  max-height: 200px;
+  overflow-y: auto;
+}
+</style>
