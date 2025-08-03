@@ -8,6 +8,7 @@ const error = ref('')
 const success = ref('')
 
 const hasSubtitles = computed(() => store.subtitleTracks.length > 0)
+const fileInput = ref<HTMLInputElement | null>(null)
 
 // Emit events for parent components
 const emit = defineEmits(['subtitles-loaded', 'subtitles-cleared'])
@@ -117,7 +118,9 @@ async function handleDrop(event: DragEvent) {
   // Process the files
   await handleFileUpload({ target: input } as unknown as Event)
 }
-
+function triggerFileInput() {
+  fileInput.value?.click()
+}
 function clearSubtitles() {
   store.clearCaptions()
   success.value = 'Subtitles cleared'
@@ -135,7 +138,7 @@ function clearSubtitles() {
         class="drag-drop-area border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer"
         @dragover="handleDragOver"
         @drop="handleDrop"
-        @click="$refs.fileInput.click()"
+        @click="triggerFileInput()"
       >
         <div class="text-lg mb-2">Drag & Drop Subtitle Files Here</div>
         <div class="text-sm text-gray-500">Or click to browse</div>

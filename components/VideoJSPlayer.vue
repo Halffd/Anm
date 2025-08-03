@@ -38,6 +38,7 @@ import { ref, onMounted, onBeforeUnmount, watch, nextTick, computed } from 'vue'
 import videojs from 'video.js';
 import 'video.js/dist/video-js.css';
 import type { VideoJsPlayer } from 'video.js';
+import type { Caption } from "../types";
 
 // Define props
 const props = defineProps<{
@@ -92,7 +93,7 @@ const videoContainer = ref<HTMLDivElement | null>(null);
 const videoElement = ref<HTMLVideoElement | null>(null);
 const player = ref<VideoJsPlayer | null>(null);
 const subtitleObserver = ref<MutationObserver | null>(null);
-const captionPlugin = ref(null);
+const captionPlugin = ref<any>(null) // if you’re still sketching
 
 // Define debug mode for troubleshooting
 const debugMode = ref(true);
@@ -209,31 +210,34 @@ onMounted(() => {
     document.head.appendChild(captionScript);
 
     // Initialize the player
-    player.value = videojs(videoElement.value, {
-      controls: true,
-      autoplay: false,
-      preload: 'auto',
-      fluid: true,
-      responsive: true,
-      playbackRates: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
-      width: containerSize.value.width || 640,
-      height: containerSize.value.height || 360,
-      sources: [{
-        src: props.src,
-        type: 'video/mp4'
-      }]
-    });
+    if (videoElement.value) {
+      player.value = videojs(videoElement.value, {
+        controls: true,
+        autoplay: false,
+        preload: 'auto',
+        fluid: true,
+        responsive: true,
+        playbackRates: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
+        width: containerSize.value.width || 640,
+        height: containerSize.value.height || 360,
+        sources: [{
+          src: props.src,
+          type: 'video/mp4'
+        }]
+      });
+    }
+
 
     // Initialize the caption plugin when jQuery and plugin are loaded
     const initCaptionPlugin = () => {
-      if (window.jQuery && player.value.caption) {
+      if ((player.value as any)?.caption) {
         console.log('[VideoJSPlayer] Initializing caption plugin');
-        captionPlugin.value = player.value.caption({
-          captionSize: 3,
+        captionPlugin.value = (player.value as any)?.caption?.({
+          captionSize: 9,
           captionStyle: {
             'background-color': 'rgba(0,0,0,0.8)',
             'color': 'white',
-            'padding': '3px'
+            'padding': '1px'
           },
           captionType: 'pop-on',
           data: [] // Will be populated when subtitles are loaded
@@ -252,7 +256,7 @@ onMounted(() => {
     initCaptionPlugin();
 
     // Set up the ready event handler
-    player.value.on('ready', () => {
+    player.value?.on('ready', () => {
       console.log('[VideoJSPlayer] Player is ready!');
       console.log(`[VideoJSPlayer] Player dimensions: ${playerMethods.width()}x${playerMethods.height()}`);
 
@@ -269,7 +273,7 @@ onMounted(() => {
     });
 
     // Add error handler
-    player.value.on('error', () => {
+    player.value?.on('error', () => {
       const playerError = player.value?.error();
       console.error('[VideoJSPlayer] Player error:', playerError && playerError.message);
       emit('error', new Error(playerError ? playerError.message : 'Unknown player error'));
@@ -365,7 +369,7 @@ function loadSubtitles() {
     console.log('[VideoJSPlayer] Loading subtitles with caption plugin');
 
     // Convert subtitles to the format expected by the caption plugin
-    const captionData = [];
+    const captionData: Caption[] = []
 
     props.subtitles.forEach((subtitle, index) => {
       // If subtitle has captions array, use it directly

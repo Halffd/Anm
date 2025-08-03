@@ -1,254 +1,296 @@
 /*!
  * videojs-caption
- * @version 0.2.0
- * @copyright 2024 Samping Chuang
- * @license MIT
  */
-(function (root, factory) {
-  if (typeof define === 'function' && define.amd) {
-    define(['video.js', 'jquery'], factory);
-  } else if (typeof module !== 'undefined' && module.exports) {
-    module.exports = factory(require('video.js'), require('jquery'));
-  } else {
-    factory(root.videojs, root.jQuery);
+
+import videojs from 'video.js';
+const Plugin = videojs.getPlugin('plugin');
+
+// Default options
+const defaults = {
+  captionSize: 3,
+  captionStyle: {
+    backgroundColor: "rgba(0,0,0,0.8)",
+    color: 'white',
+    padding: "3px"
+  },
+  onCaptionChange: () => {},
+  captionType: "pop-on" // 'pop-on' or 'roll-up'
+};
+
+const fontSizeTable = [
+  '0.75em', '0.85em', '0.95em', '1em', '1.05em', '1.15em', '1.25em', '1.35em', '1.45em'
+];
+
+/**
+ * Caption VideoJS plugin
+ * Provides advanced caption display with positioning and styling
+ */
+class Caption extends Plugin {
+  constructor(player, options) {
+    super(player);
+
+    this.options = videojs.mergeOptions(defaults, options);
+    this.captionData = this.options.data || [];
+    this.captionSize = this.options.captionSize;
+    this.captionType = this.options.captionType;
+
+    this.rowCursorID = -1;
+    this.captionRows = [];
+    this.captionRowsRender = [];
+    this.captionRowsCache = [];
+    this.captionRowsRenderCache = [];
+    this.captionEl = null;
+
+    // Setup event listeners
+    this.player.on('timeupdate', this.handleTimeUpdate.bind(this));
+
+    // Initialize
+    this.createCaptionEl();
   }
-}(this, function (videojs, $) {
-  'use strict';
-
-  var defaults = {
-    captionSize: 3,
-    captionStyle: {
-      'background-color': "rgba(0,0,0,0.8)",
-      'color': 'white',
-      'padding': "3px"
-    },
-    onCaptionChange: function() {},
-    captionType: "pop-on"
-  };
-
-  var fontSizeTable = [
-    '0.75em', '0.85em', '0.95em', '1em', '1.05em', '1.15em', '1.25em', '1.35em', '1.45em'
-  ];
 
   /**
-   * Initialize the plugin.
-   * @param options (optional) {object} configuration for the plugin
+   * Create the caption DOM element
    */
-  videojs.plugin('caption', function (options) {
-    var settings = videojs.mergeOptions(defaults, options);
-    var player = this;
-    var captionData = settings.data || [];
-    var captionSize = settings.captionSize;
-    var captionType = settings.captionType;
-    var rowCursorID = -1;
-    var captionRows = [];
-    var captionRowsRender = [];
-    var captionRowsCache = [];
-    var captionRowsRenderCache = [];
-    var captionEl = null;
+  createCaptionEl() {
+    if (!this.captionEl) {
+      this.captionEl = document.createElement('div');
+      this.captionEl.className = 'vjs-caption-overlay';
+      this.player.el().appendChild(this.captionEl);
 
-    // Create caption DOM element
-    function createCaptionEl() {
-      if (!captionEl) {
-        captionEl = document.createElement('div');
-        captionEl.className = 'vjs-caption-overlay';
-        player.el().appendChild(captionEl);
-        
-        // Apply base styles
-        $(captionEl).css({
-          'position': 'absolute',
-          'z-index': 1,
-          'width': '100%',
-          'text-align': 'center',
-          'pointer-events': 'none',
-          'font-size': fontSizeTable[captionSize]
-        });
-        
-        // Apply user-defined styles
-        $(captionEl).css(settings.captionStyle);
-      }
-      return captionEl;
+      // Apply styles
+      Object.assign(this.captionEl.style, {
+        position: 'absolute',
+        zIndex: '1',
+        width: '100%',
+        textAlign: 'center',
+        pointerEvents: 'none',
+        fontSize: fontSizeTable[this.captionSize],
+        ...this.options.captionStyle
+      });
+    }
+    return this.captionEl;
+  }
+
+  /**
+   * Handle timeupdate events
+   */
+  handleTimeUpdate() {
+    this.processCaptions(this.player.currentTime());
+  }
+
+  /**
+   * Update caption display with current captions
+   */
+  updateCaption() {
+    const el = this.captionEl;
+
+    // Clear existing captions
+    while (el.firstChild) {
+      el.removeChild(el.firstChild);
     }
 
-    // Update caption display
-    function updateCaption() {
-      var el = createCaptionEl();
-      var html = '';
-      
-      if (captionType === "roll-up") {
-        for (var i = 0; i < captionRowsRender.length; i++) {
-          html += '<div class="vjs-caption-line">' + captionRowsRender[i].data + '</div>';
-        }
-      } else { // pop-on mode
-        for (var i = 0; i < captionRowsRender.length; i++) {
-          var row = captionRowsRender[i];
-          var positionClass = '';
-          var alignmentClass = '';
-          
-          // Position classes
-          if (row.position === 'HT') {
-            positionClass = 'vjs-caption-top';
-          } else if (row.position === 'VR') {
-            positionClass = 'vjs-caption-right';
-          } else if (row.position === 'VL') {
-            positionClass = 'vjs-caption-left';
-          } else {
-            positionClass = 'vjs-caption-bottom'; // Default HB
-          }
-          
-          // Alignment classes
-          if (row.alignment === 'L') {
-            alignmentClass = 'vjs-caption-align-left';
-          } else {
-            alignmentClass = 'vjs-caption-align-center'; // Default C
-          }
-          
-          html += '<div class="vjs-caption-line ' + positionClass + ' ' + alignmentClass + '">' + row.data + '</div>';
-        }
-      }
-      
-      el.innerHTML = html;
-    }
+    if (this.captionType === "roll-up") {
+      // Roll-up mode
+      this.captionRowsRender.forEach(caption => {
+        const line = document.createElement('div');
+        line.className = 'vjs-caption-line';
+        line.innerHTML = caption.data;
+        el.appendChild(line);
+      });
+    } else {
+      // Pop-on mode
+      this.captionRowsRender.forEach(row => {
+        const line = document.createElement('div');
+        line.className = 'vjs-caption-line';
 
-    // Process caption data for the current time
-    function processCaptions(time) {
-      var currentTime = time * 1000; // Convert to milliseconds
-      var newRows = [];
-      var newRowsRender = [];
-      
-      // Find captions that should be displayed at the current time
-      for (var i = 0; i < captionData.length; i++) {
-        var caption = captionData[i];
-        if (currentTime >= caption.startTime && currentTime <= caption.endTime) {
-          newRows.push(caption);
-          
-          // Create render object with position and alignment
-          var renderObj = {
-            data: caption.data || caption.text,
-            position: caption.position || 'HB', // Default to horizontal bottom
-            alignment: caption.alignment || 'C'  // Default to center
-          };
-          
-          newRowsRender.push(renderObj);
-          
-          // Trigger callback if this is a new caption
-          if (captionRows.indexOf(caption) === -1 && typeof settings.onCaptionChange === 'function') {
-            settings.onCaptionChange(caption.id || i);
-          }
-        }
-      }
-      
-      // Handle roll-up captions differently
-      if (captionType === "roll-up") {
-        // For roll-up, we only support bottom position
-        // Check if we need to update the display
-        var shouldUpdate = false;
-        
-        // If we have new captions
-        if (newRows.length > 0) {
-          var lastNewRow = newRows[newRows.length - 1];
-          rowCursorID = lastNewRow.id || captionData.indexOf(lastNewRow);
-          
-          // Check if this is a new row to add
-          if (captionRowsCache.indexOf(lastNewRow) === -1) {
-            captionRowsCache.push(lastNewRow);
-            captionRowsRenderCache.push({
-              data: lastNewRow.data || lastNewRow.text,
-              position: 'HB',
-              alignment: 'C'
-            });
-            shouldUpdate = true;
-          }
+        // Position classes
+        if (row.position === 'HT') {
+          line.classList.add('vjs-caption-top');
+        } else if (row.position === 'VR') {
+          line.classList.add('vjs-caption-right');
+        } else if (row.position === 'VL') {
+          line.classList.add('vjs-caption-left');
         } else {
-          // No captions at current time, clear the roll-up
-          if (captionRowsCache.length > 0) {
-            captionRowsCache = [];
-            captionRowsRenderCache = [];
-            shouldUpdate = true;
-          }
+          line.classList.add('vjs-caption-bottom'); // Default HB
         }
-        
-        // Update the display rows
-        captionRows = captionRowsCache.slice();
-        captionRowsRender = captionRowsRenderCache.slice();
-        
-        if (shouldUpdate) {
-          updateCaption();
-        }
-      } else {
-        // For pop-on mode, just replace all captions
-        captionRows = newRows;
-        captionRowsRender = newRowsRender;
-        updateCaption();
-      }
-    }
 
-    // Set up time update handler
-    player.on('timeupdate', function() {
-      processCaptions(player.currentTime());
+        // Alignment classes
+        if (row.alignment === 'L') {
+          line.classList.add('vjs-caption-align-left');
+        } else {
+          line.classList.add('vjs-caption-align-center'); // Default C
+        }
+
+        line.innerHTML = row.data;
+        el.appendChild(line);
+      });
+    }
+  }
+
+  /**
+   * Process caption data for the current time
+   * @param {number} time - Current playback time in seconds
+   */
+  processCaptions(time) {
+    const currentTime = time * 1000; // Convert to milliseconds
+    const newRows = [];
+    const newRowsRender = [];
+
+    // Find captions that should be displayed at the current time
+    this.captionData.forEach((caption, index) => {
+      if (currentTime >= caption.startTime && currentTime <= caption.endTime) {
+        newRows.push(caption);
+
+        // Create render object with position and alignment
+        const renderObj = {
+          data: caption.data || caption.text,
+          position: caption.position || 'HB', // Default to horizontal bottom
+          alignment: caption.alignment || 'C'  // Default to center
+        };
+
+        newRowsRender.push(renderObj);
+
+        // Trigger callback if this is a new caption
+        if (!this.captionRows.includes(caption) && typeof this.options.onCaptionChange === 'function') {
+          this.options.onCaptionChange(caption.id || index);
+        }
+      }
     });
 
-    // API Methods
-    player.caption = {
-      updateCaption: function() {
-        processCaptions(player.currentTime());
-      },
-      
-      loadNewCaption: function(data) {
-        captionData = data || [];
-        captionRows = [];
-        captionRowsRender = [];
-        captionRowsCache = [];
-        captionRowsRenderCache = [];
-        rowCursorID = -1;
-        player.pause();
-        player.currentTime(0);
-        processCaptions(0);
-      },
-      
-      getRowCursorID: function() {
-        return rowCursorID;
-      },
-      
-      getCaptionData: function() {
-        return captionData;
-      },
-      
-      increaseFontSize: function() {
-        if (captionSize < fontSizeTable.length - 1) {
-          captionSize++;
-          $(captionEl).css('font-size', fontSizeTable[captionSize]);
-        }
-      },
-      
-      decreaseFontSize: function() {
-        if (captionSize > 0) {
-          captionSize--;
-          $(captionEl).css('font-size', fontSizeTable[captionSize]);
-        }
-      },
-      
-      changeToRollUp: function() {
-        captionType = "roll-up";
-        captionRows = [];
-        captionRowsRender = [];
-        captionRowsCache = [];
-        captionRowsRenderCache = [];
-        rowCursorID = -1;
-        processCaptions(player.currentTime());
-      },
-      
-      changeToPopOn: function() {
-        captionType = "pop-on";
-        captionRows = [];
-        captionRowsRender = [];
-        captionRowsCache = [];
-        captionRowsRenderCache = [];
-        rowCursorID = -1;
-        processCaptions(player.currentTime());
-      }
-    };
+    // Handle roll-up captions differently
+    if (this.captionType === "roll-up") {
+      let shouldUpdate = false;
 
-    return player.caption;
-  });
-}));
+      // If we have new captions
+      if (newRows.length > 0) {
+        const lastNewRow = newRows[newRows.length - 1];
+        this.rowCursorID = lastNewRow.id || this.captionData.indexOf(lastNewRow);
+
+        // Check if this is a new row to add
+        if (!this.captionRowsCache.includes(lastNewRow)) {
+          this.captionRowsCache.push(lastNewRow);
+          this.captionRowsRenderCache.push({
+            data: lastNewRow.data || lastNewRow.text,
+            position: 'HB',
+            alignment: 'C'
+          });
+          shouldUpdate = true;
+        }
+      } else {
+        // No captions at current time, clear the roll-up
+        if (this.captionRowsCache.length > 0) {
+          this.captionRowsCache = [];
+          this.captionRowsRenderCache = [];
+          shouldUpdate = true;
+        }
+      }
+
+      // Update the display rows
+      this.captionRows = [...this.captionRowsCache];
+      this.captionRowsRender = [...this.captionRowsRenderCache];
+
+      if (shouldUpdate) {
+        this.updateCaption();
+      }
+    } else {
+      // For pop-on mode, just replace all captions
+      this.captionRows = newRows;
+      this.captionRowsRender = newRowsRender;
+      this.updateCaption();
+    }
+  }
+
+  /**
+   * API: Update captions at current time
+   */
+  update() {
+    this.processCaptions(this.player.currentTime());
+  }
+
+  /**
+   * API: Load new caption data
+   * @param {Array} data - Caption data array
+   */
+  loadNewCaption(data) {
+    this.captionData = data || [];
+    this.captionRows = [];
+    this.captionRowsRender = [];
+    this.captionRowsCache = [];
+    this.captionRowsRenderCache = [];
+    this.rowCursorID = -1;
+    this.player.pause();
+    this.player.currentTime(0);
+    this.processCaptions(0);
+  }
+
+  /**
+   * API: Get current row cursor ID
+   * @return {number} The row cursor ID
+   */
+  getRowCursorID() {
+    return this.rowCursorID;
+  }
+
+  /**
+   * API: Get caption data
+   * @return {Array} The caption data
+   */
+  getCaptionData() {
+    return this.captionData;
+  }
+
+  /**
+   * API: Increase font size
+   */
+  increaseFontSize() {
+    if (this.captionSize < fontSizeTable.length - 1) {
+      this.captionSize++;
+      this.captionEl.style.fontSize = fontSizeTable[this.captionSize];
+    }
+  }
+
+  /**
+   * API: Decrease font size
+   */
+  decreaseFontSize() {
+    if (this.captionSize > 0) {
+      this.captionSize--;
+      this.captionEl.style.fontSize = fontSizeTable[this.captionSize];
+    }
+  }
+
+  /**
+   * API: Change to roll-up caption mode
+   */
+  changeToRollUp() {
+    this.captionType = "roll-up";
+    this.resetCaptions();
+  }
+
+  /**
+   * API: Change to pop-on caption mode
+   */
+  changeToPopOn() {
+    this.captionType = "pop-on";
+    this.resetCaptions();
+  }
+
+  /**
+   * Reset caption display
+   */
+  resetCaptions() {
+    this.captionRows = [];
+    this.captionRowsRender = [];
+    this.captionRowsCache = [];
+    this.captionRowsRenderCache = [];
+    this.rowCursorID = -1;
+    this.processCaptions(this.player.currentTime());
+  }
+}
+
+// Register the plugin with Video.js
+videojs.registerPlugin('caption', function(options) {
+  return new Caption(this, options);
+});
+
+export default Caption;

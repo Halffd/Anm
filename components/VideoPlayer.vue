@@ -219,11 +219,6 @@ function setSidebarMode(mode: 'subtitles' | 'playlist') {
   }
 }
 
-// Player event handlers
-function onPlayerReady(playerInstance: any) {
-  console.log('Player is ready')
-}
-
 function onPlay() {
   isPlaying.value = true
   emit('playing')
@@ -544,7 +539,7 @@ function handleSubtitlesLoaded(event: any) {
   // Update the player
   nextTick(() => {
     if (player.value) {
-      player.value.updateCaptions()
+      player.updateCaptions()
     }
   })
   
@@ -561,7 +556,7 @@ function handleSubtitlesCleared() {
   // Update the player
   nextTick(() => {
     if (player.value) {
-      player.value.updateCaptions()
+      player.updateCaptions()
     }
   })
   
@@ -596,13 +591,14 @@ function toggleSubtitlePosition(trackIndex: number) {
 }
 
 // Player event handlers
-function onPlayerReady(playerInstance: any) {
-  player.value = playerInstance
-  videoDuration.value = player.value.duration() || 0
+function onPlayerReady(playerInstance: typeof VideoJSPlayer) {
+  player = playerInstance
+  props.player = playerInstance
+  videoDuration.value = playerInstance.duration() || 0
   
   // Load any existing subtitles
   if (subtitleTracks.value.length > 0) {
-    player.value.updateCaptions()
+    playerInstance.updateCaptions()
   }
 }
 </script>
